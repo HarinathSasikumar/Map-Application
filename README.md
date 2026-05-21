@@ -26,7 +26,7 @@ Built entirely with pure HTML, CSS, and JavaScript, the project combines real-wo
 Add your deployment link here:
 
 ```bash
-https://yourusername.github.io/paranoid-gps/
+https://HarinathSasikumar.github.io/paranoid-gps/
 ```
 
 ---
