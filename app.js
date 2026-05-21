@@ -1,0 +1,569 @@
+// Map Initialization
+const map = L.map('map', {
+    zoomControl: false,
+    zoomAnimation: true
+}).setView([51.505, -0.09], 13); // Default London, will attempt to geolocate
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// Dark styled OpenStreetMap tiles filter applied via CSS
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap Paranoid Edition'
+}).addTo(map);
+
+// System State
+let state = {
+    start: null,
+    end: null,
+    isParanoid: true,
+    trustLevel: 0,
+    maxTrust: 5,
+    tapTimestamps: [],
+    routeLayer: null,
+    startMarker: null,
+    endMarker: null,
+    paranoidWaypoints: [],
+    speechEnabled: true,
+    speechSynthesis: window.speechSynthesis,
+    voices: []
+};
+
+// Initialize Speech Synthesis
+const initSpeech = () => {
+    state.voices = state.speechSynthesis.getVoices();
+};
+if (speechSynthesis.onvoiceschanged !== undefined) {
+    speechSynthesis.onvoiceschanged = initSpeech;
+} else {
+    initSpeech();
+}
+
+function speakDirection(text) {
+    if (!state.speechEnabled) return;
+    
+    // Stop any currently speaking instructions
+    state.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    // Try to find an English voice (preferably a deep or robotic one based on OS, but default is fine)
+    const enVoices = state.voices.filter(v => v.lang.startsWith('en'));
+    if (enVoices.length > 0) {
+        // Just pick the first English voice available
+        utterance.voice = enVoices[0]; 
+    }
+    
+    utterance.pitch = 0.8; // Lower pitch for a more serious/apocalyptic tone
+    utterance.rate = 0.9;  // Slightly slower for clarity
+    utterance.volume = 1;
+
+    state.speechSynthesis.speak(utterance);
+}
+
+// UI Elements
+const uiCoordsStart = document.getElementById('start-coords');
+const uiCoordsEnd = document.getElementById('end-coords');
+const btnNavigate = document.getElementById('btn-navigate');
+const btnClear = document.getElementById('btn-clear');
+const modeIndicator = document.getElementById('mode-indicator');
+const trustBar = document.getElementById('trust-bar');
+const routeInfo = document.getElementById('route-info');
+const routeDist = document.getElementById('route-dist');
+const routeTime = document.getElementById('route-time');
+const paranoidWarn = document.getElementById('paranoid-warning');
+
+const psyModal = document.getElementById('psy-modal');
+const trustModal = document.getElementById('trust-modal');
+const btnBreathe = document.getElementById('btn-breathe');
+const tapDots = document.querySelectorAll('.tap-dot');
+const modalFeedback = document.getElementById('modal-feedback');
+
+const searchInput = document.getElementById('search-input');
+const btnSearch = document.getElementById('btn-search');
+const searchResults = document.getElementById('search-results');
+
+const scanOverlay = document.getElementById('scan-overlay');
+const scanTitle = document.getElementById('scan-title');
+const scanDesc = document.getElementById('scan-desc');
+
+// Custom Icons
+const createIcon = (color) => L.divIcon({
+    className: 'custom-icon',
+    html: `<div style="background-color: ${color}; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 15px ${color}, inset 0 0 5px rgba(255,255,255,0.8); border: 2px solid rgba(255,255,255,0.2);"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7]
+});
+
+const startIcon = createIcon('#4facf7');
+const endIcon = createIcon('#f74f4f');
+const hazardIcon = L.divIcon({
+    className: 'custom-icon',
+    html: `<div style="background-color: #ffaa00; width: 22px; height: 22px; border-radius: 4px; box-shadow: 0 0 15px #ffaa00; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; color: black;">☣</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
+});
+
+let hazardMarkers = [];
+function clearHazards() {
+    hazardMarkers.forEach(m => map.removeLayer(m));
+    hazardMarkers = [];
+}
+
+// Try Geolocation for Start location
+map.locate({setView: true, maxZoom: 12});
+map.on('locationfound', function(e) {
+    if (!state.start) {
+        state.start = e.latlng;
+        state.startMarker = L.marker(state.start, {icon: startIcon}).addTo(map);
+        uiCoordsStart.textContent = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+        
+        // Fit map if end is already set (unlikely at startup but good for robustness)
+        if (state.end) {
+            map.fitBounds(L.latLngBounds(state.start, state.end), { padding: [50, 50] });
+            btnNavigate.disabled = false;
+        }
+    }
+});
+map.on('locationerror', function(e) {
+    uiCoordsStart.textContent = "Geoloc Failed - Click Map";
+});
+
+
+// Destination Search
+let searchDebounce;
+
+searchInput.addEventListener('input', (e) => {
+    clearTimeout(searchDebounce);
+    const query = e.target.value;
+    if (query.length < 3) {
+        searchResults.classList.add('hidden');
+        return;
+    }
+    searchDebounce = setTimeout(() => {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
+            .then(res => res.json())
+            .then(data => {
+                searchResults.innerHTML = '';
+                if (data.length > 0) {
+                    searchResults.classList.remove('hidden');
+                    data.slice(0, 5).forEach(item => {
+                        const li = document.createElement('li');
+                        li.textContent = item.display_name;
+                        li.addEventListener('click', () => {
+                            selectDestination(item.lat, item.lon, item.display_name);
+                        });
+                        searchResults.appendChild(li);
+                    });
+                } else {
+                    searchResults.classList.add('hidden');
+                }
+            }).catch(err => console.error("Search Error", err));
+    }, 500);
+});
+
+btnSearch.addEventListener('click', () => {
+    searchInput.dispatchEvent(new Event('input'));
+});
+
+// Used to store the selected destination if interrupted by the popup
+let pendingDestination = null;
+
+function selectDestination(lat, lng, name) {
+    searchResults.classList.add('hidden');
+    searchInput.value = name;
+    
+    pendingDestination = { lat, lng, name };
+    
+    if (state.trustLevel < 4) {
+        // Trigger popup instead of placing marker immediately
+        startPsyCheck("DESTINATION PROTOCOL");
+    } else {
+        finalizeDestination();
+    }
+}
+
+function finalizeDestination() {
+    if (!pendingDestination) return;
+    
+    const latlng = L.latLng(pendingDestination.lat, pendingDestination.lng);
+    state.end = latlng;
+    if (state.endMarker) map.removeLayer(state.endMarker);
+    state.endMarker = L.marker(state.end, {icon: endIcon}).addTo(map);
+    uiCoordsEnd.textContent = `${parseFloat(pendingDestination.lat).toFixed(4)}, ${parseFloat(pendingDestination.lng).toFixed(4)}`;
+    
+    // Fit map to show both markers
+    if (state.start) {
+        map.fitBounds(L.latLngBounds(state.start, state.end), { padding: [50, 50] });
+    } else {
+        map.setView(state.end, 13);
+    }
+    
+    if (state.start) {
+        btnNavigate.disabled = false;
+        btnNavigate.textContent = "START DIRECTIONS";
+    }
+    pendingDestination = null;
+}
+
+// Map Click Fallback Handler for Start/End (If geolocation fails or user prefers clicking)
+map.on('click', function(e) {
+    if (!state.start) {
+        state.start = e.latlng;
+        state.startMarker = L.marker(state.start, {icon: startIcon}).addTo(map);
+        uiCoordsStart.textContent = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+    } else if (!state.end) {
+        // Fallback setting end via click
+        selectDestination(e.latlng.lat, e.latlng.lng, "Manual Map Selection");
+    }
+});
+
+btnClear.addEventListener('click', clearMap);
+
+function clearMap() {
+    if (state.startMarker) map.removeLayer(state.startMarker);
+    if (state.endMarker) map.removeLayer(state.endMarker);
+    if (state.routeLayer) map.removeLayer(state.routeLayer);
+    
+    state.start = null;
+    state.end = null;
+    state.routeLayer = null;
+    
+    clearHazards();
+    
+    uiCoordsStart.textContent = 'Detecting position...';
+    uiCoordsEnd.textContent = 'Awaiting Input...';
+    btnNavigate.disabled = true;
+    routeInfo.classList.add('hidden');
+    
+    // Reactivate paranoid mode on clear
+    setParanoidMode(true);
+}
+
+function setParanoidMode(isParanoid) {
+    state.isParanoid = isParanoid;
+    if (isParanoid) {
+        modeIndicator.textContent = 'PARANOID';
+        modeIndicator.className = 'mode-paranoid';
+        paranoidWarn.style.display = 'block';
+        // Trust drops slightly if paranoid reactivates
+        updateTrust(-1);
+    } else {
+        modeIndicator.textContent = 'NORMAL OPTIMAL';
+        modeIndicator.className = 'mode-normal';
+        paranoidWarn.style.display = 'none';
+    }
+}
+
+function updateTrust(delta) {
+    state.trustLevel = Math.max(0, Math.min(state.maxTrust, state.trustLevel + delta));
+    trustBar.style.width = `${(state.trustLevel / state.maxTrust) * 100}%`;
+}
+
+// Navigation Initiation - go directly to satellite scan (popup already shown at search time)
+btnNavigate.addEventListener('click', () => {
+    performSatelliteScan();
+});
+
+function performSatelliteScan() {
+    btnNavigate.textContent = "SCANNING...";
+    btnNavigate.disabled = true;
+    
+    scanOverlay.classList.remove('hidden');
+    scanTitle.textContent = "🛰 Satellite Scan in Progress.";
+    scanTitle.style.color = "var(--accent-normal)";
+    scanDesc.textContent = "Scanning terrain and environmental conditions for safe navigation routes. Please wait while the system analyzes the area.";
+    
+    speakDirection("Satellite Scan Initiated. Analyzing terrain for biological and radiological threats.");
+    clearHazards();
+    
+    setTimeout(() => {
+        // Randomly simulate a hazard
+        const hasHazard = Math.random() > 0.4; // 60% chance of extreme danger
+        let detourWaypoint = null;
+        
+        if (hasHazard) {
+            // Generate hazard marker near midpoint of route
+            const latDiff = state.end.lat - state.start.lat;
+            const lngDiff = state.end.lng - state.start.lng;
+            const dist = Math.sqrt(latDiff*latDiff + lngDiff*lngDiff);
+            
+            const hLat = state.start.lat + (latDiff * 0.5) + (Math.random() * dist * 0.1 - dist * 0.05);
+            const hLng = state.start.lng + (lngDiff * 0.5) + (Math.random() * dist * 0.1 - dist * 0.05);
+            const hazardLatLng = L.latLng(hLat, hLng);
+            
+            const hMarker = L.marker(hazardLatLng, {icon: hazardIcon}).bindPopup("RADIATION / HAZARD ZONE").addTo(map);
+            hazardMarkers.push(hMarker);
+            
+            // Calculate a safe detour point perpendicularly away from the hazard
+            const perpLat = -lngDiff;
+            const perpLng = latDiff;
+            const pDist = Math.sqrt(perpLat*perpLat + perpLng*perpLng);
+            
+            const detourLat = hLat + (perpLat/pDist) * (dist * 0.25);
+            const detourLng = hLng + (perpLng/pDist) * (dist * 0.25);
+            detourWaypoint = L.latLng(detourLat, detourLng);
+            
+            scanTitle.textContent = "⚠️ Satellite Warning";
+            scanTitle.style.color = "var(--accent-paranoid)";
+            scanDesc.textContent = "Hazard detected on the selected route. The system recommends an alternative safer path. Rerouting...";
+            speakDirection("Satellite Warning: Hazard detected on the selected route. The system recommends an alternative safer path.");
+            
+            // Allow time for the user to hear/read warning
+            setTimeout(() => {
+                scanTitle.textContent = "✅ Satellite Scan Complete";
+                scanTitle.style.color = "var(--accent-normal)";
+                scanDesc.textContent = "Safe route identified based on detour analysis. Navigation system ready.";
+                // We're ready!
+                setTimeout(() => {
+                    scanOverlay.classList.add('hidden');
+                    setParanoidMode(false);
+                    calculateRoute(detourWaypoint);
+                }, 1500);
+            }, 3000); 
+            
+        } else {
+            scanTitle.textContent = "✅ Satellite Scan Complete";
+            scanTitle.style.color = "var(--accent-normal)";
+            scanDesc.textContent = "Safe route identified. Navigation system ready.";
+            speakDirection("Satellite Scan Complete. No hazards detected. Safe route identified. Navigation system ready.");
+            
+            setTimeout(() => {
+                scanOverlay.classList.add('hidden');
+                setParanoidMode(false);
+                calculateRoute(null);
+            }, 2000);
+        }
+    }, 1500); // reduced from 4500
+}
+
+
+// Psychological Check Logic
+function startPsyCheck(context = "NAVIGATION") {
+    state.tapTimestamps = [];
+    updateTapUI();
+    modalFeedback.textContent = 'Awaiting synchronization...';
+    modalFeedback.className = 'feedback';
+    psyModal.classList.remove('hidden');
+}
+
+btnBreathe.addEventListener('click', () => {
+    const now = Date.now();
+    
+    if (state.tapTimestamps.length > 0) {
+        const lastTap = state.tapTimestamps[state.tapTimestamps.length - 1];
+        const diff = now - lastTap;
+        
+        // Critical rhythm check
+        if (diff < 1500) {
+            failPsyCheck("SYNC FAILED: Heart rate elevated. Tapping too quickly. The GPS refuses to navigate stressed survivors.");
+            return;
+        } else if (diff > 4500) {
+            failPsyCheck("SYNC FAILED: Focus lost. Rhythm too slow.");
+            return;
+        }
+    }
+    
+    state.tapTimestamps.push(now);
+    updateTapUI();
+    
+    // Pulse effect
+    btnBreathe.style.transform = 'scale(0.85)';
+    setTimeout(() => btnBreathe.style.transform = 'scale(1)', 150);
+    
+    if (state.tapTimestamps.length === 3) {
+        successPsyCheck();
+    }
+});
+
+function updateTapUI() {
+    tapDots.forEach((dot, index) => {
+        if (index < state.tapTimestamps.length) {
+            dot.classList.add('active');
+        } else {
+            dot.classList.remove('active');
+        }
+    });
+}
+
+function failPsyCheck(msg) {
+    state.tapTimestamps = [];
+    setTimeout(updateTapUI, 500); // slight delay so user sees failure
+    modalFeedback.textContent = msg;
+    modalFeedback.className = 'feedback error';
+    updateTrust(-1);
+    
+    // Button glitch effect
+    btnBreathe.style.borderColor = 'var(--accent-paranoid)';
+    btnBreathe.style.color = 'var(--accent-paranoid)';
+    setTimeout(() => {
+        btnBreathe.style.borderColor = 'var(--accent-normal)';
+        btnBreathe.style.color = 'var(--accent-normal)';
+    }, 1000);
+}
+
+function successPsyCheck() {
+    modalFeedback.textContent = "GPS STABILIZED. Breathing rhythm accepted. Confidence restored.";
+    modalFeedback.className = 'feedback success';
+    updateTrust(1);
+    
+    setTimeout(() => {
+        psyModal.classList.add('hidden');
+        
+        // Always finalize the destination after the popup (popup only appears during search)
+        if (pendingDestination) {
+            finalizeDestination();
+        }
+    }, 2000);
+}
+
+// Route Calculation
+async function calculateRoute(detourWaypoint = null) {
+    if (state.routeLayer) map.removeLayer(state.routeLayer);
+    
+    let waypoints = [];
+    
+    if (state.isParanoid) {
+        // Generate paranoid waypoints (create a massive zigzag pattern)
+        const latDiff = state.end.lat - state.start.lat;
+        const lngDiff = state.end.lng - state.start.lng;
+        
+        // Perpendicular vector
+        const perpLat = -lngDiff;
+        const perpLng = latDiff;
+        
+        const dist = Math.sqrt(latDiff*latDiff + lngDiff*lngDiff);
+        // Extremely high scaler to make it 5-10x longer
+        const scale = Math.max(0.1, (dist * 4) / Math.sqrt(perpLat*perpLat + perpLng*perpLng)); 
+        
+        const dir1 = Math.random() > 0.5 ? 1 : -1;
+        const dir2 = -dir1; // Opposite zigzag
+        
+        const wp1 = [
+            state.start.lng + (lngDiff * 0.3) + (perpLng * scale * dir1),
+            state.start.lat + (latDiff * 0.3) + (perpLat * scale * dir1)
+        ];
+        
+        const wp2 = [
+            state.start.lng + (lngDiff * 0.7) + (perpLng * scale * dir2),
+            state.start.lat + (latDiff * 0.7) + (perpLat * scale * dir2)
+        ];
+        
+        waypoints = [
+            `${state.start.lng},${state.start.lat}`,
+            `${wp1[0]},${wp1[1]}`,
+            `${wp2[0]},${wp2[1]}`,
+            `${state.end.lng},${state.end.lat}`
+        ];
+    } else if (detourWaypoint) {
+        // A hazard was detected, plot via the safe detour waypoint
+        waypoints = [
+            `${state.start.lng},${state.start.lat}`,
+            `${detourWaypoint.lng},${detourWaypoint.lat}`,
+            `${state.end.lng},${state.end.lat}`
+        ];
+    } else {
+        // Normal optimal route
+        waypoints = [
+            `${state.start.lng},${state.start.lat}`,
+            `${state.end.lng},${state.end.lat}`
+        ];
+    }
+    
+    // Check selected transport mode (Car, Bike, Bus - mapped to driving if Bus)
+    const transportMode = document.querySelector('input[name="transport"]:checked').value;
+    
+    const coordString = waypoints.join(';');
+    // Use OSRM for routing (added steps=true for voice navigation)
+    const url = `https://router.project-osrm.org/route/v1/${transportMode}/${coordString}?overview=full&geometries=geojson&steps=true`;
+    
+    try {
+        btnNavigate.textContent = "CALCULATING SECURE PATH...";
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.code === 'Ok') {
+            const route = data.routes[0];
+            const coordinates = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+            
+            state.routeLayer = L.polyline(coordinates, {
+                color: state.isParanoid ? '#ff3333' : '#00ffcc',
+                weight: state.isParanoid ? 3 : 5,
+                opacity: 0.8,
+                dashArray: state.isParanoid ? '10, 15' : '',
+                className: state.isParanoid ? 'route-path paranoid' : 'route-path optimal'
+            }).addTo(map);
+            
+            map.fitBounds(state.routeLayer.getBounds(), { padding: [60, 60] });
+            
+            // Update Info Panel
+            const distKm = (route.distance / 1000).toFixed(2);
+            const timeMin = Math.round(route.duration / 60);
+            
+            routeDist.textContent = `${distKm} km`;
+            routeTime.textContent = `${timeMin} min`;
+            routeDist.style.color = state.isParanoid ? 'var(--accent-paranoid)' : 'var(--accent-normal)';
+            routeTime.style.color = state.isParanoid ? 'var(--accent-paranoid)' : 'var(--accent-normal)';
+            
+            routeInfo.classList.remove('hidden');
+            
+            // Handle Voice Navigation
+            if (route.legs && route.legs[0] && route.legs[0].steps && !state.isParanoid) {
+                // Determine apocalypse-themed start message
+                let startMsg = "Navigation started. Threat levels acceptable. Follow the highlighted route.";
+                
+                // Get the immediate first step if available to chain onto the greeting
+                const firstStep = route.legs[0].steps[1]; // steps[0] is usually just "depart"
+                if (firstStep && firstStep.maneuver && firstStep.maneuver.instruction) {
+                    // Make instructions sound slightly cooler/robotic
+                    let nextAction = firstStep.maneuver.instruction.replace('Turn', 'Adjust heading').replace('Continue', 'Proceed');
+                    startMsg += ` First directive: ${nextAction} in ${firstStep.distance.toFixed(0)} meters.`;
+                }
+                
+                // Speak the command
+                speakDirection(startMsg);
+            } else if (state.isParanoid) {
+                speakDirection("Warning. Hostile activity detected in optimal path. Calculating extreme evasion route.");
+            }
+
+        } else {
+            throw new Error('OSRM No route found');
+        }
+    } catch (err) {
+        console.error("Routing error:", err);
+        // Fallback simple line if OSRM is down or fails to connect points
+        // Create an artificial zigzag line
+        const coords = state.isParanoid ? 
+            [[state.start.lat, state.start.lng], 
+             [state.start.lat + (state.end.lat - state.start.lat)/2 + 0.05, state.start.lng - 0.05], 
+             [state.start.lat + (state.end.lat - state.start.lat)*0.75 - 0.05, state.end.lng + 0.05], 
+             [state.end.lat, state.end.lng]] : 
+            [[state.start.lat, state.start.lng], [state.end.lat, state.end.lng]];
+            
+        state.routeLayer = L.polyline(coords, {
+            color: state.isParanoid ? '#ff3333' : '#00ffcc',
+            weight: state.isParanoid ? 3 : 5,
+            opacity: 0.8,
+            dashArray: state.isParanoid ? '10, 15' : ''
+        }).addTo(map);
+        
+        map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+        routeInfo.classList.remove('hidden');
+        routeDist.textContent = "DATA CORRUPTED";
+        routeTime.textContent = "--";
+        routeDist.style.color = 'var(--text-main)';
+        routeTime.style.color = 'var(--text-main)';
+        
+        speakDirection("Critical Error. Satellite link lost. Route recalculation failed.");
+    } finally {
+        btnNavigate.textContent = "UPDATE ROUTE";
+    }
+}
+
+// Recalculate route if mode changes
+document.querySelectorAll('input[name="transport"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+        if (state.routeLayer) {
+            calculateRoute();
+        }
+    });
+});

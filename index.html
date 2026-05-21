@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paranoid GPS Navigation</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts for premium look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Satellite Scan Overlay -->
+    <div id="scan-overlay" class="hidden">
+        <div class="scan-radar">
+            <div class="scan-sweep"></div>
+            <div class="scan-ring scan-ring-1"></div>
+            <div class="scan-ring scan-ring-2"></div>
+            <div class="scan-ring scan-ring-3"></div>
+            <div class="scan-dot"></div>
+            <div class="scan-dot scan-dot-2"></div>
+        </div>
+        <div class="scan-text">
+            <h2 id="scan-title">🛰 Satellite Scan in Progress.</h2>
+            <p id="scan-desc">Scanning terrain and environmental conditions for safe navigation routes. Please wait while the system analyzes the area.</p>
+        </div>
+    </div>
+        <div id="sidebar">
+            <h1 class="brand">PARANOID GPS</h1>
+            <div class="status-panel">
+                <div class="status-item">
+                    <span>SYSTEM MODE:</span>
+                    <span id="mode-indicator" class="mode-paranoid">PARANOID</span>
+                </div>
+                <div class="status-item">
+                    <span>TRUST LEVEL:</span>
+                    <div class="trust-bar-container">
+                        <div id="trust-bar" class="trust-bar" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <p class="instructions">Enter your <b>Location</b> and <b>Destination</b>. Navigation AI will assess threat levels.</p>
+
+                <div class="waypoints">
+                    <div class="waypoint">
+                        <span class="dot start-dot"></span>
+                        <div class="waypoint-info">
+                            <span class="waypoint-label">📍 YOUR LOCATION</span>
+                            <span id="start-coords">Detecting position...</span>
+                        </div>
+                    </div>
+                    <div class="waypoint">
+                        <span class="dot end-dot"></span>
+                        <span id="end-coords">Awaiting Input...</span>
+                    </div>
+                </div>
+
+                <div class="transport-options">
+                    <label class="transport-label">
+                        <input type="radio" name="transport" value="driving" checked>
+                        <span class="transport-btn">🚗 CAR</span>
+                    </label>
+                    <label class="transport-label">
+                        <input type="radio" name="transport" value="cycling">
+                        <span class="transport-btn">🚲 BIKE</span>
+                    </label>
+                    <label class="transport-label">
+                        <input type="radio" name="transport" value="driving">
+                        <span class="transport-btn">🚌 BUS</span>
+                    </label>
+                </div>
+
+                <button id="btn-navigate" disabled>START DIRECTIONS</button>
+                <button id="btn-clear" class="secondary">RESET INTERFACE</button>
+            </div>
+            
+            <div id="route-info" class="hidden">
+                <h3>ROUTE DATA</h3>
+                <div class="route-stat">Distance: <span id="route-dist">--</span></div>
+                <div class="route-stat">Est. Time: <span id="route-time">--</span></div>
+                <div id="paranoid-warning" class="warning-text">⚠️ ALERTO: Deflecting from optimal path to avoid high-risk zones. Route multiplied for evasion.</div>
+            </div>
+        </div>
+
+        <div id="map"></div>
+
+        <!-- Psychological Check Modal -->
+        <div id="psy-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="glitch-wrapper">
+                    <h2 class="glitch" data-text="MENTAL STABILITY CHECK">MENTAL STABILITY CHECK</h2>
+                </div>
+                <!-- <p class="sys-msg">Your stress level appears high. Panicked survivors make poor navigation decisions.</p> -->
+                <div class="ai-warning">
+                    <div class="icon">⚠️</div>
+                    <div class="text">
+                        <strong>WARNING: Elevated user stress detected.</strong><br/>
+                        Panicked survivors compromise stealth routing protocols.
+                    </div>
+                </div>
+                <p class="instruction-text">Please confirm that you are calm enough to continue the journey. <br/><b>Tap the breathing icon 3 times slowly to stabilize navigation.</b><br/> <small>(Maintain at least 1.5 seconds between breaths)</small></p>
+                
+                <div class="breathing-container">
+                    <button id="btn-breathe" class="breathe-btn">
+                        <div class="pulse-ring"></div>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="tap-indicators">
+                    <div class="tap-dot"></div>
+                    <div class="tap-dot"></div>
+                    <div class="tap-dot"></div>
+                </div>
+
+                <div id="modal-feedback" class="feedback">Awaiting synchronization...</div>
+            </div>
+        </div>
+        
+        <!-- Trust Skipped Modal -->
+        <div id="trust-modal" class="modal hidden">
+            <div class="modal-content success-box">
+                <h2>TRUST LEVEL SUFFICIENT</h2>
+                <div class="ai-warning success">
+                    <div class="icon">✔️</div>
+                    <div class="text">
+                        GPS recognizes previous calm behavior.<br/>
+                        Mental stability pre-verified.
+                    </div>
+                </div>
+                <p>Navigation starting immediately.</p>
+                <div class="loading-bar"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
